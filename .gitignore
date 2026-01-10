@@ -58,3 +58,10 @@ env/
 *.ckpt
 *.h5
 
+
+# Large model files
+*.pkl
+*.pth
+*.ckpt
+*.h5
+*.pb
