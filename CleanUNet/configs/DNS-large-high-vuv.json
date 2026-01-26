@@ -13,7 +13,7 @@
         "tsfm_d_inner": 2048
     },
     "train_config": {
-        "exp_path": "DNS-large-high",
+        "exp_path": "DNS-large-high-vuv",
         "log":{
             "directory": "./exp",
             "ckpt_iter": "max",
@@ -37,11 +37,16 @@
                 "win_lengths": [240, 600, 1200],
                 "fft_sizes": [512, 1024, 2048]
             },
-            "time_vuv_loss": false,
-            "freq_vuv_loss": false,
+            "use_vuv_loss": true,
             "vuv_frame_size": 80,
-            "vuv_time_thd": 2.0,
-            "vuv_freq_thd": 2.0
+            "vuv_time_thd": 1.8,
+            "vuv_freq_thd": 1.3,
+            "time_voiced_weight": 2.0,
+            "time_unvoiced_weight": 0.5,
+            "freq_low_voiced_weight": 1.5,
+            "freq_low_unvoiced_weight": 0.3,
+            "freq_high_voiced_weight": 0.5,
+            "freq_high_unvoiced_weight": 2.0
         }
     },
     "trainset_config": {

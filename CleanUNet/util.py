@@ -178,44 +178,140 @@ def sampling(net, noisy_audio):
     return net(noisy_audio)
 
 
-def loss_fn(net, X, ell_p, ell_p_lambda, stft_lambda, mrstftloss, **kwargs):
+def loss_fn(net, X, ell_p, ell_p_lambda, stft_lambda, mrstftloss, 
+             use_vuv_loss=False,
+             time_vuv_loss=False,         # NEW: Enable VUV weighting in time domain only
+             freq_vuv_loss=False,         # NEW: Enable VUV weighting in frequency domain only
+             vuv_frame_size=80, vuv_time_thd=2.0, vuv_freq_thd=2.0,
+             time_voiced_weight=2.0, time_unvoiced_weight=0.5,
+             freq_low_voiced_weight=1.5, freq_low_unvoiced_weight=0.3,
+             freq_high_voiced_weight=0.5, freq_high_unvoiced_weight=2.0,
+             use_adaptive_vuv=False,      # NEW: Enable adaptive VUV
+             adaptive_vuv_lambda=2.0,     # NEW: Adaptive VUV weight
+             importance_module=None,      # NEW: Importance module instance
+             adaptive_vuv_config=None,    # NEW: Adaptive VUV config dict
+             **kwargs):
     """
-    Loss function in CleanUNet
+    Loss function in CleanUNet with optional VUV-weighted loss
+    
+    Supports both fixed VUV weighting and adaptive VUV weighting strategies
 
     Parameters:
     net: network
-    X: training data pair (clean audio, noisy_audio)
-    ell_p: \ell_p norm (1 or 2) of the AE loss
+    X: training data tuple (clean_audio, noisy_audio) or (clean_audio, noisy_audio, unvoiced_audio, voiced_audio)
+    ell_p: ell_p norm (1 or 2) of the AE loss
     ell_p_lambda: factor of the AE loss
     stft_lambda: factor of the STFT loss
     mrstftloss: multi-resolution STFT loss function
+    use_vuv_loss: whether to use fixed VUV weighting
+    use_adaptive_vuv: whether to use adaptive VUV weighting (NEW)
+    adaptive_vuv_lambda: weight for adaptive VUV loss (NEW)
+    importance_module: adaptive VUV weighting module (NEW)
+    adaptive_vuv_config: config dict for adaptive VUV (NEW)
+    vuv_frame_size: frame size for time-domain VUV detection
+    vuv_time_thd: threshold for time-domain VUV detection
+    vuv_freq_thd: threshold for freq-domain VUV detection
+    time_voiced_weight: weight for voiced frames in time-domain loss
+    time_unvoiced_weight: weight for unvoiced frames in time-domain loss
+    freq_low_voiced_weight: weight for voiced frames in low-freq loss
+    freq_low_unvoiced_weight: weight for unvoiced frames in low-freq loss
+    freq_high_voiced_weight: weight for voiced frames in high-freq loss
+    freq_high_unvoiced_weight: weight for unvoiced frames in high-freq loss
 
     Returns:
     loss: value of objective function
     output_dic: values of each component of loss
     """
 
-    assert type(X) == tuple and len(X) == 2
+    if len(X) == 2:
+        clean_audio, noisy_audio = X
+        unvoiced_audio, voiced_audio = None, None
+    elif len(X) == 4:
+        clean_audio, noisy_audio, unvoiced_audio, voiced_audio = X
+    else:
+        raise ValueError(f"X should be tuple of length 2 or 4, got {len(X)}")
     
-    clean_audio, noisy_audio = X
     B, C, L = clean_audio.shape
     output_dic = {}
     loss = 0.0
     
-    # AE loss
-    denoised_audio = net(noisy_audio)  
+    voiced_mask = None
+    # Apply time-domain VUV weighting only if time_vuv_loss is explicitly enabled
+    if (time_vuv_loss or (use_vuv_loss and not freq_vuv_loss)) and \
+       unvoiced_audio is not None and voiced_audio is not None:
+        from vuv_utils import compute_time_domain_vuv_mask, compute_weighted_time_loss
+        voiced_mask = compute_time_domain_vuv_mask(
+            unvoiced_audio, voiced_audio,
+            frame_size=vuv_frame_size,
+            threshold=vuv_time_thd
+        )
+    
+    denoised_audio = net(noisy_audio)
 
     if ell_p == 2:
-        ae_loss = nn.MSELoss()(denoised_audio, clean_audio)
+        ae_loss_per_sample = (denoised_audio - clean_audio) ** 2
     elif ell_p == 1:
-        ae_loss = F.l1_loss(denoised_audio, clean_audio)
+        ae_loss_per_sample = torch.abs(denoised_audio - clean_audio)
     else:
         raise NotImplementedError
+    
+    if voiced_mask is not None:
+        ae_loss = compute_weighted_time_loss(
+            ae_loss_per_sample, voiced_mask,
+            voiced_weight=time_voiced_weight,
+            unvoiced_weight=time_unvoiced_weight
+        )
+    else:
+        ae_loss = ae_loss_per_sample.mean()
+    
     loss += ae_loss * ell_p_lambda
     output_dic["reconstruct"] = ae_loss.data * ell_p_lambda
 
+    # ============ 2. Frequency-domain loss ============
+    
+    # Option A: Adaptive VUV loss (NEW)
+    if use_adaptive_vuv and importance_module is not None and \
+       unvoiced_audio is not None and voiced_audio is not None:
+        from adaptive_vuv_loss import adaptive_vuv_loss
+        
+        # Get config parameters
+        if adaptive_vuv_config is None:
+            adaptive_vuv_config = {}
+        
+        adaptive_loss, attention_weights = adaptive_vuv_loss(
+            denoised_audio, clean_audio,
+            unvoiced_audio, voiced_audio,
+            importance_module=importance_module,
+            n_fft=adaptive_vuv_config.get('n_fft', 512),
+            hop_size=adaptive_vuv_config.get('hop_size', 160),
+            win_length=adaptive_vuv_config.get('win_length', 400),
+            vuv_threshold=adaptive_vuv_config.get('vuv_threshold', vuv_freq_thd)
+        )
+        
+        loss += adaptive_loss * adaptive_vuv_lambda
+        output_dic["adaptive_vuv"] = adaptive_loss.data * adaptive_vuv_lambda
+        output_dic["attention_weights"] = attention_weights  # For logging/visualization
+    
+    # Option B: Traditional multi-resolution STFT loss
     if stft_lambda > 0:
-        sc_loss, mag_loss = mrstftloss(denoised_audio.squeeze(1), clean_audio.squeeze(1))
+        # Apply frequency-domain VUV weighting only if freq_vuv_loss is explicitly enabled
+        if (freq_vuv_loss or (use_vuv_loss and not time_vuv_loss)) and \
+           not use_adaptive_vuv and unvoiced_audio is not None and voiced_audio is not None:
+            # Fixed VUV-weighted STFT loss
+            sc_loss, mag_loss = mrstftloss(
+                denoised_audio.squeeze(1), clean_audio.squeeze(1),
+                unvoiced_audio=unvoiced_audio,
+                voiced_audio=voiced_audio,
+                vuv_threshold=vuv_freq_thd,
+                freq_low_voiced_weight=freq_low_voiced_weight,
+                freq_low_unvoiced_weight=freq_low_unvoiced_weight,
+                freq_high_voiced_weight=freq_high_voiced_weight,
+                freq_high_unvoiced_weight=freq_high_unvoiced_weight
+            )
+        else:
+            # Standard STFT loss
+            sc_loss, mag_loss = mrstftloss(denoised_audio.squeeze(1), clean_audio.squeeze(1))
+        
         loss += (sc_loss + mag_loss) * stft_lambda
         output_dic["stft_sc"] = sc_loss.data * stft_lambda
         output_dic["stft_mag"] = mag_loss.data * stft_lambda

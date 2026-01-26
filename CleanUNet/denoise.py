@@ -46,9 +46,29 @@ np.random.seed(0)
 from scipy.io.wavfile import write as wavwrite
 from scipy.io.wavfile import read as wavread
 
-from dataset import load_CleanNoisyPairDataset
+from dataset import load_CleanNoisyPairDataset, CleanNoisyPairDataset
 from util import rescale, find_max_epoch, print_size, sampling
 from network import CleanUNet
+
+
+def collate_fn_ignore_none(batch):
+
+    clean_list = []
+    noisy_list = []
+    fileid_list = []
+    
+    for item in batch:
+
+        clean, noisy, _, _, fileid = item  
+        clean_list.append(clean)
+        noisy_list.append(noisy)
+        fileid_list.append(fileid)
+    
+    # Stack tensors
+    clean_batch = torch.stack(clean_list, dim=0)
+    noisy_batch = torch.stack(noisy_list, dim=0)
+    
+    return clean_batch, noisy_batch, None, None, fileid_list
 
 
 def denoise(output_directory, ckpt_iter, subset, dump=False):
@@ -70,11 +90,23 @@ def denoise(output_directory, ckpt_iter, subset, dump=False):
     # load data
     loader_config = deepcopy(trainset_config)
     loader_config["crop_length_sec"] = 0
-    dataloader = load_CleanNoisyPairDataset(
-        **loader_config, 
+    
+
+    dataset = CleanNoisyPairDataset(
+        root=loader_config["root"],
         subset=subset,
-        batch_size=1, 
-        num_gpus=1
+        crop_length_sec=0,
+        load_vuv=False  
+    )
+    
+    dataloader = torch.utils.data.DataLoader(
+        dataset,
+        batch_size=1,
+        shuffle=False,
+        num_workers=0,  
+        pin_memory=False,
+        drop_last=False,
+        collate_fn=collate_fn_ignore_none
     )
 
     # predefine model
@@ -106,8 +138,10 @@ def denoise(output_directory, ckpt_iter, subset, dump=False):
     all_generated_audio = []
     all_clean_audio = []
     sortkey = lambda name: '_'.join(name.split('/')[-1].split('_')[1:])
-    for clean_audio, noisy_audio, fileid in tqdm(dataloader):
-        filename = sortkey(fileid[0][0])
+    for clean_audio, noisy_audio, _, _, fileid_list in tqdm(dataloader):
+
+        fileid = fileid_list[0]
+        filename = sortkey(fileid[0])
 
         noisy_audio = noisy_audio.cuda()
         LENGTH = len(noisy_audio[0].squeeze())

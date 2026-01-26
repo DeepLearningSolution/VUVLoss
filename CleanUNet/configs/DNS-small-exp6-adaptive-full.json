@@ -1,0 +1,60 @@
+{
+    "network_config": {
+        "channels_input": 1,
+        "channels_output": 1,
+        "channels_H": 32,
+        "max_H": 256,
+        "encoder_n_layers": 6,
+        "kernel_size": 4,
+        "stride": 2,
+        "tsfm_n_layers": 3,
+        "tsfm_n_head": 4,
+        "tsfm_d_model": 256,
+        "tsfm_d_inner": 512
+    },
+    "train_config": {
+        "exp_path": "DNS-small-exp6-adaptive-full",
+        "log": {
+            "directory": "./exp",
+            "ckpt_iter": "max",
+            "iters_per_ckpt": 5000,
+            "iters_per_valid": 200
+        },
+        "optimization": {
+            "n_iters": 25000,
+            "learning_rate": 0.0002,
+            "batch_size_per_gpu": 8
+        },
+        "loss_config": {
+            "ell_p": 1,
+            "ell_p_lambda": 1.0,
+            "stft_lambda": 0.0,
+            "use_vuv_loss": true,
+            "vuv_frame_size": 80,
+            "vuv_time_thd": 2.0,
+            "time_voiced_weight": 2.0,
+            "time_unvoiced_weight": 0.5,
+            "use_adaptive_vuv": true,
+            "adaptive_vuv_lambda": 2.0,
+            "adaptive_vuv_config": {
+                "n_fft": 512,
+                "hop_size": 160,
+                "win_length": 400,
+                "n_freq_bands": 8,
+                "vuv_threshold": 2.0
+            }
+        }
+    },
+    "trainset_config": {
+        "root": "./dns",
+        "crop_length_sec": 10,
+        "sample_rate": 16000
+    },
+    "gen_config": {
+        "output_directory": "./exp"
+    },
+    "dist_config": {
+        "dist_backend": "nccl",
+        "dist_url": "tcp://localhost:54321"
+    }
+}

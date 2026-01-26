@@ -78,22 +78,50 @@ def train(num_gpus, rank, group_name,
         print("ckpt_directory: ", ckpt_directory, flush=True)
 
     # load training data
+    load_vuv = (loss_config.get('use_vuv_loss', False) or 
+                loss_config.get('use_adaptive_vuv', False) or
+                loss_config.get('time_vuv_loss', False) or
+                loss_config.get('freq_vuv_loss', False))
     trainloader = load_CleanNoisyPairDataset(**trainset_config, 
                             subset='training',
                             batch_size=optimization["batch_size_per_gpu"], 
-                            num_gpus=num_gpus)
-    print('Data loaded')
+                            num_gpus=num_gpus,
+                            load_vuv=load_vuv)
+    print('Data loaded', f'(VUV: {load_vuv})')
     
     # predefine model
     net = CleanUNet(**network_config).cuda()
     print_size(net)
+    
+    # Initialize adaptive VUV importance module if needed (NEW)
+    importance_module = None
+    if loss_config.get('use_adaptive_vuv', False):
+        from adaptive_vuv_loss import AdaptiveVUVWeightingModule
+        
+        adaptive_config = loss_config.get('adaptive_vuv_config', {})
+        importance_module = AdaptiveVUVWeightingModule(
+            n_fft=adaptive_config.get('n_fft', 512),
+            n_freq_bands=adaptive_config.get('n_freq_bands', 8)
+        ).cuda()
+        
+        total_params = sum(p.numel() for p in importance_module.parameters())
+        print(f'Importance module initialized with {total_params:,} parameters')
 
     # apply gradient all reduce
     if num_gpus > 1:
         net = apply_gradient_allreduce(net)
+        if importance_module is not None:
+            importance_module = apply_gradient_allreduce(importance_module)
 
-    # define optimizer
-    optimizer = torch.optim.Adam(net.parameters(), lr=optimization["learning_rate"])
+    # define optimizer (include importance_module parameters if present)
+    if importance_module is not None:
+        optimizer = torch.optim.Adam(
+            list(net.parameters()) + list(importance_module.parameters()),
+            lr=optimization["learning_rate"]
+        )
+        print('Optimizer includes importance module parameters')
+    else:
+        optimizer = torch.optim.Adam(net.parameters(), lr=optimization["learning_rate"])
 
     # load checkpoint
     time0 = time.time()
@@ -110,6 +138,11 @@ def train(num_gpus, rank, group_name,
             # feed model dict and optimizer state
             net.load_state_dict(checkpoint['model_state_dict'])
             optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
+            
+            # Load importance module state dict if present (NEW)
+            if importance_module is not None and 'importance_module_state_dict' in checkpoint:
+                importance_module.load_state_dict(checkpoint['importance_module_state_dict'])
+                print('Importance module state loaded from checkpoint')
 
             # record training time based on elapsed time
             time0 -= checkpoint['training_time_seconds']
@@ -143,10 +176,20 @@ def train(num_gpus, rank, group_name,
 
     while n_iter < optimization["n_iters"] + 1:
         # for each epoch
-        for clean_audio, noisy_audio, _ in trainloader: 
+        for batch_data in trainloader:
+            if len(batch_data) == 3:
+                clean_audio, noisy_audio, fileid = batch_data
+                unvoiced_audio, voiced_audio = None, None
+            elif len(batch_data) == 5:
+                clean_audio, noisy_audio, unvoiced_audio, voiced_audio, fileid = batch_data
+            else:
+                raise ValueError(f"Unexpected batch data length: {len(batch_data)}")
             
             clean_audio = clean_audio.cuda()
             noisy_audio = noisy_audio.cuda()
+            if unvoiced_audio is not None:
+                unvoiced_audio = unvoiced_audio.cuda()
+                voiced_audio = voiced_audio.cuda()
 
             # If you have a data augmentation function augment()
             # noise = noisy_audio - clean_audio
@@ -155,14 +198,20 @@ def train(num_gpus, rank, group_name,
 
             # back-propagation
             optimizer.zero_grad()
-            X = (clean_audio, noisy_audio)
-            loss, loss_dic = loss_fn(net, X, **loss_config, mrstftloss=mrstftloss)
+            X = (clean_audio, noisy_audio, unvoiced_audio, voiced_audio)
+            loss, loss_dic = loss_fn(net, X, **loss_config, mrstftloss=mrstftloss,
+                                     importance_module=importance_module)  # NEW
             if num_gpus > 1:
                 reduced_loss = reduce_tensor(loss.data, num_gpus).item()
             else:
                 reduced_loss = loss.item()
             loss.backward()
             grad_norm = nn.utils.clip_grad_norm_(net.parameters(), 1e9)
+            
+            # Also clip importance module gradients if present (NEW)
+            if importance_module is not None:
+                importance_grad_norm = nn.utils.clip_grad_norm_(importance_module.parameters(), 0.5)
+            
             scheduler.step()
             optimizer.step()
 
@@ -175,17 +224,43 @@ def train(num_gpus, rank, group_name,
                     # save to tensorboard
                     tb.add_scalar("Train/Train-Loss", loss.item(), n_iter)
                     tb.add_scalar("Train/Train-Reduced-Loss", reduced_loss, n_iter)
+                    
+                    # Log individual loss components (NEW)
+                    for key, value in loss_dic.items():
+                        if key != 'attention_weights' and isinstance(value, (int, float, torch.Tensor)):
+                            if isinstance(value, torch.Tensor):
+                                value = value.item()
+                            tb.add_scalar(f"Train/{key}", value, n_iter)
+                    
+                    # Visualize attention weights if using adaptive VUV (NEW)
+                    if 'attention_weights' in loss_dic and n_iter % 5000 == 0:
+                        try:
+                            from adaptive_vuv_loss import visualize_attention_weights
+                            visualize_attention_weights(
+                                loss_dic['attention_weights'], 
+                                n_iter, 
+                                save_dir=os.path.join(log_directory, 'vis')
+                            )
+                        except Exception as e:
+                            print(f"Failed to visualize attention weights: {e}")
                     tb.add_scalar("Train/Gradient-Norm", grad_norm, n_iter)
                     tb.add_scalar("Train/learning-rate", optimizer.param_groups[0]["lr"], n_iter)
 
             # save checkpoint
             if n_iter > 0 and n_iter % log["iters_per_ckpt"] == 0 and rank == 0:
                 checkpoint_name = '{}.pkl'.format(n_iter)
-                torch.save({'iter': n_iter,
+                checkpoint = {
+                    'iter': n_iter,
                             'model_state_dict': net.state_dict(),
                             'optimizer_state_dict': optimizer.state_dict(),
-                            'training_time_seconds': int(time.time()-time0)}, 
-                            os.path.join(ckpt_directory, checkpoint_name))
+                    'training_time_seconds': int(time.time()-time0)
+                }
+                
+                # Save importance module state if present (NEW)
+                if importance_module is not None:
+                    checkpoint['importance_module_state_dict'] = importance_module.state_dict()
+                
+                torch.save(checkpoint, os.path.join(ckpt_directory, checkpoint_name))
                 print('model at iteration %s is saved' % n_iter)
 
             n_iter += 1

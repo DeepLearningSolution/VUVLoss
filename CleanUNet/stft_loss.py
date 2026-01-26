@@ -154,12 +154,21 @@ class MultiResolutionSTFTLoss(torch.nn.Module):
         for fs, ss, wl in zip(fft_sizes, hop_sizes, win_lengths):
             self.stft_losses += [STFTLoss(fs, ss, wl, window, band)]
 
-    def forward(self, x, y):
-        """Calculate forward propagation.
+    def forward(self, x, y, unvoiced_audio=None, voiced_audio=None, vuv_threshold=2.0,
+                freq_low_voiced_weight=1.5, freq_low_unvoiced_weight=0.3,
+                freq_high_voiced_weight=0.5, freq_high_unvoiced_weight=2.0):
+        """Calculate forward propagation with VUV-weighted loss.
 
         Args:
             x (Tensor): Predicted signal (B, T) or (B, #subband, T).
             y (Tensor): Groundtruth signal (B, T) or (B, #subband, T).
+            unvoiced_audio (Tensor, optional): Unvoiced reference signal for VUV masking.
+            voiced_audio (Tensor, optional): Voiced reference signal for VUV masking.
+            vuv_threshold (float): Threshold for VUV detection.
+            freq_low_voiced_weight (float): Weight for voiced frames in low frequency.
+            freq_low_unvoiced_weight (float): Weight for unvoiced frames in low frequency.
+            freq_high_voiced_weight (float): Weight for voiced frames in high frequency.
+            freq_high_unvoiced_weight (float): Weight for unvoiced frames in high frequency.
 
         Returns:
             Tensor: Multi resolution spectral convergence loss value.
@@ -169,10 +178,58 @@ class MultiResolutionSTFTLoss(torch.nn.Module):
         if len(x.shape) == 3:
             x = x.view(-1, x.size(2))  # (B, C, T) -> (B x C, T)
             y = y.view(-1, y.size(2))  # (B, C, T) -> (B x C, T)
+            if unvoiced_audio is not None:
+                unvoiced_audio = unvoiced_audio.view(-1, unvoiced_audio.size(2))
+            if voiced_audio is not None:
+                voiced_audio = voiced_audio.view(-1, voiced_audio.size(2))
+        
         sc_loss = 0.0
         mag_loss = 0.0
+        
         for f in self.stft_losses:
-            sc_l, mag_l = f(x, y)
+            if unvoiced_audio is not None and voiced_audio is not None:
+                from vuv_utils import compute_freq_domain_vuv_mask, compute_weighted_freq_loss
+                
+                voiced_mask = compute_freq_domain_vuv_mask(
+                    unvoiced_audio, voiced_audio,
+                    fft_size=f.fft_size,
+                    hop_size=f.shift_size,
+                    win_length=f.win_length,
+                    threshold=vuv_threshold
+                )
+                
+                x_mag = stft(x, f.fft_size, f.shift_size, f.win_length, f.window)
+                y_mag = stft(y, f.fft_size, f.shift_size, f.win_length, f.window)
+                
+                if f.band == "high":
+                    freq_mask_ind = x_mag.shape[1] // 2
+                    x_mag = x_mag[:, freq_mask_ind:, :]
+                    y_mag = y_mag[:, freq_mask_ind:, :]
+                    voiced_mask = voiced_mask[:, freq_mask_ind:, :]
+                
+                sc_loss_per_bin = torch.abs(x_mag - y_mag) / (y_mag + 1e-8)
+                mag_loss_per_bin = torch.abs(torch.log(y_mag + 1e-8) - torch.log(x_mag + 1e-8))
+                
+                sc_l = compute_weighted_freq_loss(
+                    sc_loss_per_bin, voiced_mask,
+                    voiced_weight_low=freq_low_voiced_weight,
+                    unvoiced_weight_low=freq_low_unvoiced_weight,
+                    voiced_weight_high=freq_high_voiced_weight,
+                    unvoiced_weight_high=freq_high_unvoiced_weight,
+                    freq_split_ratio=0.5
+                )
+                
+                mag_l = compute_weighted_freq_loss(
+                    mag_loss_per_bin, voiced_mask,
+                    voiced_weight_low=freq_low_voiced_weight,
+                    unvoiced_weight_low=freq_low_unvoiced_weight,
+                    voiced_weight_high=freq_high_voiced_weight,
+                    unvoiced_weight_high=freq_high_unvoiced_weight,
+                    freq_split_ratio=0.5
+                )
+            else:
+                sc_l, mag_l = f(x, y)
+            
             sc_loss += sc_l
             mag_loss += mag_l
 
