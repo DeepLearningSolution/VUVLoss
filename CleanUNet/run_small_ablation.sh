@@ -25,14 +25,14 @@ TRAIN_CMD="python train.py"
 echo ""
 echo "[1/7] Exp-0: Baseline (~6h)"
 echo "Started at: $(date)"
-$TRAIN_CMD -c configs/DNS-small-exp0-baseline.json 2>&1 | tee logs_small/exp0.log
+#$TRAIN_CMD -c configs/DNS-small-exp0-baseline.json 2>&1 | tee logs_small/exp0.log
 echo "Completed at: $(date)"
 
 # Exp-1: +Fixed VUV (Time Domain Only)
 echo ""
 echo "[2/7] Exp-1: +Fixed VUV (Time) (~6h)"
 echo "Started at: $(date)"
-$TRAIN_CMD -c configs/DNS-small-exp1-fixed-time.json 2>&1 | tee logs_small/exp1.log
+#$TRAIN_CMD -c configs/DNS-small-exp1-fixed-time.json 2>&1 | tee logs_small/exp1.log
 echo "Completed at: $(date)"
 
 # Exp-2: +Fixed VUV (Frequency Domain Only)

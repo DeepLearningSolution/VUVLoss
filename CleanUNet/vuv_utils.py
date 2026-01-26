@@ -138,8 +138,8 @@ def compute_weighted_freq_loss(loss_per_bin, voiced_mask,
     Apply VUV-based weighting to frequency-domain loss with frequency-dependent weights.
     
     Args:
-        loss_per_bin: (B, freq_bins, frames), per-bin loss values
-        voiced_mask: (B, freq_bins, frames), 1=voiced, 0=unvoiced
+        loss_per_bin: (B, frames, freq_bins), per-bin loss values (T x F format from stft())
+        voiced_mask: (B, frames, freq_bins), 1=voiced, 0=unvoiced (T x F format)
         voiced_weight_low: Weight for voiced frames in low frequency
         unvoiced_weight_low: Weight for unvoiced frames in low frequency
         voiced_weight_high: Weight for voiced frames in high frequency
@@ -149,18 +149,18 @@ def compute_weighted_freq_loss(loss_per_bin, voiced_mask,
     Returns:
         Weighted average loss (scalar)
     """
-    B, F, T = loss_per_bin.shape
+    B, T, F = loss_per_bin.shape  # Updated: now expects (B, T, F) format
     freq_split = int(F * freq_split_ratio)
     
-    # Low frequency part
-    loss_low = loss_per_bin[:, :freq_split, :]
-    mask_low = voiced_mask[:, :freq_split, :]
+    # Low frequency part (frequency is last dimension)
+    loss_low = loss_per_bin[:, :, :freq_split]  # (B, T, F_low)
+    mask_low = voiced_mask[:, :, :freq_split]
     weight_map_low = mask_low * voiced_weight_low + (1 - mask_low) * unvoiced_weight_low
     weighted_loss_low = (loss_low * weight_map_low).mean()
     
     # High frequency part
-    loss_high = loss_per_bin[:, freq_split:, :]
-    mask_high = voiced_mask[:, freq_split:, :]
+    loss_high = loss_per_bin[:, :, freq_split:]  # (B, T, F_high)
+    mask_high = voiced_mask[:, :, freq_split:]
     weight_map_high = mask_high * voiced_weight_high + (1 - mask_high) * unvoiced_weight_high
     weighted_loss_high = (loss_high * weight_map_high).mean()
     

@@ -197,15 +197,18 @@ class MultiResolutionSTFTLoss(torch.nn.Module):
                     win_length=f.win_length,
                     threshold=vuv_threshold
                 )
+                # voiced_mask is (B, F, T), but stft() returns (B, T, F), so transpose
+                voiced_mask = voiced_mask.transpose(1, 2)  # (B, F, T) -> (B, T, F)
                 
                 x_mag = stft(x, f.fft_size, f.shift_size, f.win_length, f.window)
                 y_mag = stft(y, f.fft_size, f.shift_size, f.win_length, f.window)
                 
+                # x_mag and y_mag are (B, T, F) format
                 if f.band == "high":
-                    freq_mask_ind = x_mag.shape[1] // 2
-                    x_mag = x_mag[:, freq_mask_ind:, :]
-                    y_mag = y_mag[:, freq_mask_ind:, :]
-                    voiced_mask = voiced_mask[:, freq_mask_ind:, :]
+                    freq_mask_ind = x_mag.shape[2] // 2  # Last dim is frequency
+                    x_mag = x_mag[:, :, freq_mask_ind:]  # Keep high frequencies
+                    y_mag = y_mag[:, :, freq_mask_ind:]
+                    voiced_mask = voiced_mask[:, :, freq_mask_ind:]
                 
                 sc_loss_per_bin = torch.abs(x_mag - y_mag) / (y_mag + 1e-8)
                 mag_loss_per_bin = torch.abs(torch.log(y_mag + 1e-8) - torch.log(x_mag + 1e-8))
