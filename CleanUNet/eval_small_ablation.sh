@@ -15,8 +15,8 @@ mkdir -p results_small
 experiments=(
     "exp0-baseline"
     "exp1-fixed-time"
-    #"exp2-fixed-freq"
-    #"exp3-fixed-both"
+    "exp2-fixed-freq"
+    "exp3-fixed-both"
     "exp4-adaptive-replace"
     "exp5-adaptive-add"
     "exp6-adaptive-full"

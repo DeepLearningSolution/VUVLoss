@@ -40,8 +40,8 @@
             "use_vuv_loss": true,
             "vuv_frame_size": 80,
             "vuv_time_thd": 2.0,
-            "time_voiced_weight": 2.0,
-            "time_unvoiced_weight": 0.5
+            "time_voiced_weight": 1.2,
+            "time_unvoiced_weight": 0.8
         }
     },
     "trainset_config": {
