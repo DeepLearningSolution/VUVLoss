@@ -28,14 +28,14 @@ TRAIN_CMD="python train.py"
 echo ""
 echo "[1/7] Exp-0: Baseline (~6h)"
 echo "Started at: $(date)"
-$TRAIN_CMD -c configs/DNS-small-exp0-baseline.json 2>&1 | tee logs_small/exp0.log
+#$TRAIN_CMD -c configs/DNS-small-exp0-baseline.json 2>&1 | tee logs_small/exp0.log
 echo "Completed at: $(date)"
 
 # Exp-1: +Fixed VUV (Time Domain Only)
 echo ""
 echo "[2/7] Exp-1: +Fixed VUV (Time) (~6h)"
 echo "Started at: $(date)"
-$TRAIN_CMD -c configs/DNS-small-exp1-fixed-time.json 2>&1 | tee logs_small/exp1.log
+#$TRAIN_CMD -c configs/DNS-small-exp1-fixed-time.json 2>&1 | tee logs_small/exp1.log
 echo "Completed at: $(date)"
 
 # Exp-2: +Fixed VUV (Frequency Domain Only)
@@ -56,21 +56,21 @@ echo "Completed at: $(date)"
 echo ""
 echo "[5/7] Exp-4: +Adaptive VUV (Replace) (~6h) ★"
 echo "Started at: $(date)"
-$TRAIN_CMD -c configs/DNS-small-exp4-adaptive-replace.json 2>&1 | tee logs_small/exp4.log
+#$TRAIN_CMD -c configs/DNS-small-exp4-adaptive-replace.json 2>&1 | tee logs_small/exp4.log
 echo "Completed at: $(date)"
 
 # Exp-5: +Adaptive VUV (Add to STFT)
 echo ""
 echo "[6/7] Exp-5: +Adaptive VUV (Add) (~6h)"
 echo "Started at: $(date)"
-$TRAIN_CMD -c configs/DNS-small-exp5-adaptive-add.json 2>&1 | tee logs_small/exp5.log
+#$TRAIN_CMD -c configs/DNS-small-exp5-adaptive-add.json 2>&1 | tee logs_small/exp5.log
 echo "Completed at: $(date)"
 
 # Exp-6: +Adaptive VUV (Full: Time Fixed + Freq Adaptive) - BEST
 echo ""
 echo "[7/7] Exp-6: +Adaptive VUV (Full) (~6h) ★★"
 echo "Started at: $(date)"
-$TRAIN_CMD -c configs/DNS-small-exp6-adaptive-full.json 2>&1 | tee logs_small/exp6.log
+#$TRAIN_CMD -c configs/DNS-small-exp6-adaptive-full.json 2>&1 | tee logs_small/exp6.log
 echo "Completed at: $(date)"
 
 echo ""

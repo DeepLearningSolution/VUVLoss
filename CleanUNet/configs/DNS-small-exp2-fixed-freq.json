@@ -53,10 +53,10 @@
             "time_vuv_loss": false,
             "freq_vuv_loss": true,
             "vuv_freq_thd": 2.0,
-            "freq_low_voiced_weight": 1.5,
-            "freq_low_unvoiced_weight": 0.3,
-            "freq_high_voiced_weight": 0.5,
-            "freq_high_unvoiced_weight": 2.0
+            "freq_low_voiced_weight": 1.2,
+            "freq_low_unvoiced_weight": 1.0,
+            "freq_high_voiced_weight": 0.8,
+            "freq_high_unvoiced_weight": 1.5
         }
     },
     "trainset_config": {
